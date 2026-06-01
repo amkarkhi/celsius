@@ -1,0 +1,11 @@
+rules:
+  greeting:
+    - script: 'uid > 100'
+      tag:    "vip"
+      out:
+        message: "hello, big spender"
+    - script: 'true'
+      tag:    "default"
+      out:
+        message: "hello"
+variables: {}

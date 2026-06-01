@@ -1,0 +1,30 @@
+# Sample rules for the customenv example. Scripts reference identifiers
+# that are NOT in celsius.DefaultEnv() — they're declared by the shared
+# extensions package (see ./extensions/extensions.go):
+#
+#   uid           variable (int)
+#   country       variable (string)
+#   is_internal() custom function: (int) -> bool
+#   tier()        custom function: (int) -> string
+#
+# That's why this file MUST be validated with a CLI built on extensions.Env(),
+# not the stock `celsius` binary. See ./cli/main.go.
+rules:
+  homepage:
+    - script: 'is_internal(uid)'
+      tag:    "internal"
+      out:
+        banner: "internal-only beta build"
+    - script: 'tier(uid) == "vip"'
+      tag:    "vip"
+      out:
+        banner: "welcome back, VIP"
+    - script: 'country == "IR"'
+      tag:    "iran"
+      out:
+        banner: "fa-IR landing page"
+    - script: 'true'
+      tag:    "default"
+      out:
+        banner: "hello"
+variables: {}
