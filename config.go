@@ -38,18 +38,51 @@ type Config struct {
 }
 
 // Rule is a single rule. T is the user-defined payload type.
+//
+// `Replace` declares per-field overlays for `Out`. Each key is a
+// top-level field name in T (matched by its `mapstructure:` tag); each
+// value is a CEL script evaluated at Match time against the same input
+// map the rule script saw, plus any `compute:` results. The evaluated
+// value replaces the static `Out.<key>` for the returned rule.
+//
+// Two value shapes are accepted (kept for back-compat with rule files
+// that already use the wrapper form):
+//
+//	# Plain script string — preferred for new rules:
+//	replace:
+//	  flow: 'call_arbiter(uid).sub_id == "331" ? "hybrid_search_flow" : "es8_search_flow"'
+//
+//	# Wrapper form — equivalent, older convention:
+//	replace:
+//	  flow:
+//	    type: script
+//	    value: 'call_arbiter(uid).sub_id == "331" ? "hybrid_search_flow" : "es8_search_flow"'
+//
+// A replace script that errors at Match time is logged at debug and the
+// static `Out.<key>` is kept (graceful fallback).
 type Rule[T any] struct {
-	Script string `yaml:"script" mapstructure:"script"`
-	Tag    string `yaml:"tag"    mapstructure:"tag"`
-	Out    T      `yaml:"out"    mapstructure:"out"`
+	Script  string         `yaml:"script"  mapstructure:"script"`
+	Tag     string         `yaml:"tag"     mapstructure:"tag"`
+	Out     T              `yaml:"out"     mapstructure:"out"`
+	Replace map[string]any `yaml:"replace" mapstructure:"replace"`
 
-	prog cel.Program
+	prog         cel.Program
+	outRaw       map[string]any
+	replaceProgs map[string]cel.Program
 }
 
 // configFile is the raw shape of the YAML rule file.
+//
+// `Compute` declares scripts whose results become CEL input variables
+// for every rule in this file. Each script is evaluated once per Match
+// call, in undefined order, against the host-supplied inputs; the
+// result is bound under the map key for the rule loop. Use this for
+// per-request side-effecting helpers (e.g. external arbiter lookups)
+// that need to feed multiple rules without each rule re-running them.
 type configFile[T any] struct {
 	Rules     map[string][]Rule[T] `yaml:"rules"     mapstructure:"rules"`
 	Variables map[string]string    `yaml:"variables" mapstructure:"variables"`
+	Compute   map[string]string    `yaml:"compute"   mapstructure:"compute"`
 }
 
 // Source supplies the rule-file bytes and notifies the engine when they
@@ -184,5 +217,30 @@ func parseConfig[T any](data []byte) (*configFile[T], error) {
 	if err := dec.Decode(raw); err != nil {
 		return nil, fmt.Errorf("decode: %w", err)
 	}
+	attachRawOut(out, raw)
 	return out, nil
+}
+
+// attachRawOut walks the raw YAML map and stashes the unstructured
+// `out:` block on each Rule, parallel to the typed `Out` field. Replace
+// uses this to clone-then-overlay at Match time without round-tripping
+// the typed T back to a map.
+func attachRawOut[T any](cfg *configFile[T], raw map[string]any) {
+	rulesRaw, _ := raw["rules"].(map[string]any)
+	if rulesRaw == nil {
+		return
+	}
+	for group, groupRaw := range rulesRaw {
+		list, _ := groupRaw.([]any)
+		compiled := cfg.Rules[group]
+		for i := 0; i < len(list) && i < len(compiled); i++ {
+			ruleMap, _ := list[i].(map[string]any)
+			if ruleMap == nil {
+				continue
+			}
+			if outRaw, ok := ruleMap["out"].(map[string]any); ok {
+				compiled[i].outRaw = outRaw
+			}
+		}
+	}
 }
